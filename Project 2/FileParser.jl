@@ -39,7 +39,7 @@ function mdvrp_parser(f)
     end
     close(f)
 
-    return depot_info, customer_info
+    return num_depots, num_customers, depot_info, customer_info
 
 end
 
