@@ -1,73 +1,171 @@
 module MDVRProblem
-export calculate_distances, nearest_depot
+using Random
+export init_random_chromosome, Chromosome, Depot
 
-function calculate_euclidean(x1, y1, x2, y2)
-    return sqrt((x1-x2)^2 + (y1-y2)^2)
+mutable struct Depot
+    route_encoding::Vector{Int} # Represents the genotype of depot
+    num_routes::Int
+    routes::Dict{Int, Vector{Int}}  # Represents the phenotype of depot
+    fitness::Float64
+    max_route_duration::Int
+    max_route_load::Int
+    max_routes::Int
+    id::Int
 end
 
-function calculate_distances(
+mutable struct Chromosome
+    fitness::Float64
+    num_depots::Int
+    num_customers::Int
+    depots::Vector{Depot}
+end
+ 
+
+function init_random_chromosome(
+    num_depots::Int, 
     num_customers::Int,
-    num_depots::Int,
-    depots::AbstractVector{NTuple{4, Int64}},
-    customers::AbstractVector{NTuple{3, Int64}}
-    )
-    # Calculates all interdistances
-
-    distances = zeros((num_customers+num_depots, num_customers+num_depots))
-    println(size(distances))
-
+    max_vehicles::Int,  
+    depot_assignments, 
+    depot_info,
+    customer_info,
+    distances)
+    chromosome = Chromosome(0.0, num_depots, num_customers, Vector{typeof(Depot)}(undef, num_depots))
     for i = 1:num_depots
-        x1, y1 = depots[i][1], depots[i][2]
-
-        # Calculate inter-depot distances
-        for j = 1:num_depots
-            x2, y2 = depots[j][1], depots[j][2]
-            distances[i, j] = calculate_euclidean(x1,y1,x2,y2)       
+        chromosome.depots[i] = Depot(
+            Random.shuffle(depot_assignments[i]), 
+            1, 
+            Dict(), 
+            0.0, 
+            depot_info[i][3], 
+            depot_info[i][4],
+            max_vehicles, 
+            i
+            )
+        # Generate route and check if it is feasible. If not, then generate another chromosome
+        while !(route_scheduler!(chromosome.depots[i], customer_info, distances, num_depots))
+            chromosome.depots[i] = Depot(
+            Random.shuffle(depot_assignments[i]), 
+            1, 
+            Dict(), 
+            0.0, 
+            depot_info[i][3], 
+            depot_info[i][4],
+            max_vehicles, 
+            i
+            )
         end
-
-        # Calculate depot-customer distances
-        for j = 1:num_customers
-            x2, y2 = customers[j][1], customers[j][2]
-            distances[i, j+num_depots] = calculate_euclidean(x1,y1,x2,y2)
-        end
+        chromosome.fitness += chromosome.depots[i].fitness
+    
     end
-
-    for i = 1:num_customers
-        x1, y1 = customers[i][1], customers[i][2]
-        # Calculate customer-depot distances
-        for j = 1:num_depots
-            x2, y2 = depots[j][1], depots[j][2]
-            distances[num_depots+i, j] = calculate_euclidean(x1,y1,x2,y2)
-        end
-
-        # Calculate inter-customer distances
-        for j = 1:num_customers
-            x2, y2 = customers[j][1], customers[j][2]
-            distances[num_depots+i, num_depots+j] = calculate_euclidean(x1,y1,x2,y2)
-        end
-    end
-    return distances
+    return chromosome
 end
 
-# Calculates the nearest depot for each customer
-function nearest_depot(distances::Array{Float64, 2}, num_depots::Int, num_customers::Int)
-    nearest_depot_dict = Dict()
 
-    # TODO Might need to implement borderline check for depot reassignments
-    #borderline_customers = Dict()
+function assign_customer!(nearest_depot_dict, chromosome::Chromosome)
+    for (key, val) in nearest_depot_dict
+        push!(chromosome.depots[val].customer_indices, key)
+    end
+end
 
-    for i = num_depots+1 : num_depots+num_customers
-        min_distance = distances[i, 1]
-        depot = 1
-        for j = 2 : num_depots
-            if distances[i, j] < min_distance
-                min_distance = distances[i, j]
-                depot = j
+
+# Convergence speed will most likely heavily rely on how effective the
+# route scheduler is. Possible to add customized heuristics to improve
+# performance, like adding checks for whether starting a new route will 
+# improve fitness or not.
+
+function route_scheduler!(depot::Depot, customer_info, distances, num_depots)
+    # Customer info is an array of tuples, where index of array == customer_id
+    # and the tuples are of the form (xpos, ypos, customer_demand)
+    # distances is an array of arrays designating all the interdistances between customers and depots
+    # where all customer id's are offset by num_depots
+
+    # Phase 1
+    curr_route = 1
+    route_duration = [0.0]
+    route_load = [0]
+    depot.routes[curr_route] = []
+    prev_id = depot.id
+
+    for i = 1:length(depot.route_encoding)
+        new_id = depot.route_encoding[i] + num_depots
+        demand = customer_info[depot.route_encoding[i]][3]
+        # Check if customer can be added to current route
+        if (
+            valid_duration(depot.id, depot.max_route_duration, distances, prev_id, new_id, route_duration[curr_route])
+            && valid_load(depot.max_route_load, demand, route_load[curr_route])
+            #&& shorter_than_new_route(distances, depot.id, prev_id, new_id)
+        )
+            push!(depot.routes[curr_route], depot.route_encoding[i]) # Add to route
+            route_duration[curr_route] += distances[prev_id, new_id] # Increment route duration
+            route_load[curr_route] += demand                         # Increment route load usage
+            prev_id = new_id                                         # Set customer as previously visited
+            added_to_route = true                                    # Update flag
+        
+        # If we cannot add to route, we add distance back to depot and start a new route
+        else
+            route_duration[curr_route] += distances[new_id, depot.id] # Add return to depot distance
+            curr_route += 1                                           # Increment number of routes
+            depot.routes[curr_route] = []                             # Add new route
+            push!(depot.routes[curr_route], depot.route_encoding[i])  # Add customer to new route
+            push!(route_duration, distances[depot.id, new_id])        # Add duration of new customer
+            push!(route_load, demand)                                 # Add load of new customer
+            prev_id = new_id                                          # Set customer as previously visited
+        end
+        
+        # Check if we have reached final customer
+        if i == length(depot.route_encoding)
+            route_duration[curr_route] += distances[new_id, depot.id] # Add final distance back to depot
+            if (
+                (depot.max_route_duration != 0 && route_duration[curr_route] > depot.max_route_duration) 
+                || curr_route > depot.max_routes
+                )
+                return false
             end
         end
-        nearest_depot_dict[i-num_depots] = depot
     end
-    return nearest_depot_dict
+    
+    depot.num_routes = curr_route # Set total number of routes
+    # Phase 2 
+    # Check if we can optimize route selection by setting last customer
+    # of route r to be the first customer in route r+1. Still need to boundary check, though.
+    improvement = true
+    while improvement
+        for i = 1:depot.num_routes-1
+            last_customer = depot.routes[i][end]
+            next_to_last = depot.routes[i][end-1]
+            without_last = depot.routes[i][1:end-1]
+            # Find duration of route without last element
+            without_last_duration = (
+                route_duration[i]
+                - distances[last_customer + num_depots][depot.id]     # Subtract last customer->depot
+                - distances[next_to_last + num_depots][last_customer] # Subtract next_to_last->last customer
+                + distances[next_to_last + num_depots][depot.id]      # Add next_to_last->depot
+            )
+
+            added_customer = [last_customer] + depot.routes[i+1][:]
+
+    end
+    
+    depot.fitness = sum(route_duration)
+    return true
+end
+
+function valid_duration(depot_id, max_route_duration, distances, prev_id, new_id, curr_route_duration)
+    # If max_route_duration == 0, then route can be as long as it wants
+    return (max_route_duration == 0 ||
+        distances[prev_id, new_id] 
+        + curr_route_duration 
+        + distances[new_id, depot_id]
+        <= max_route_duration
+        )
+end
+
+function valid_load(max_route_load, demand, curr_route_load) 
+    return demand + curr_route_load <= max_route_load
+end
+
+function shorter_than_new_route(distances, depot_id::Int, prev_id::Int, new_id::Int)
+    return (distances[prev_id, new_id] <= distances[depot_id, new_id])
 end
 
 end

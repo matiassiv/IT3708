@@ -5,7 +5,9 @@ export mdvrp_parser
 function mdvrp_parser(f)
     # Parser for the textfiles describing MDVRP problems
     # Takes in filename as a String
-    # Returns two Vectors of tuples, where index refers to the particular customer/depot
+    # Returns two ints and two Vectors of tuples, where index refers to the particular customer/depot
+    #   num_depots = total number of depots in problem
+    #   num_customers = total number of customers in problem
     #   depot_info = [(xpos, ypos, max_duration, max_load)]
     #   customer_info = [(xpos, ypos, demand)]
     a = readlines(f)
@@ -21,7 +23,6 @@ function mdvrp_parser(f)
 
         # Get position for each depot
         i_depot = i + num_customers + num_depots
-        println(i_depot)
         depot_pos = split(a[i + num_customers + num_depots])
         depot_xpos, depot_ypos = parse(Int, depot_pos[2]), parse(Int, depot_pos[3])
 
@@ -39,7 +40,7 @@ function mdvrp_parser(f)
     end
     close(f)
 
-    return num_depots, num_customers, depot_info, customer_info
+    return num_depots, num_customers, max_vehicles, depot_info, customer_info
 
 end
 
