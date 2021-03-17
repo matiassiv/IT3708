@@ -6,7 +6,8 @@ mutable struct Depot
     route_encoding::Vector{Int} # Represents the genotype of depot
     num_routes::Int
     routes::Dict{Int, Vector{Int}}  # Represents the phenotype of depot
-    fitness::Float64
+    route_loads::Vector{Int}
+    route_durations::Vector{Float64}
     max_route_duration::Int
     max_route_load::Int
     max_routes::Int
@@ -34,8 +35,9 @@ function init_random_chromosome(
         chromosome.depots[i] = Depot(
             Random.shuffle(depot_assignments[i]), 
             1, 
-            Dict(), 
-            0.0, 
+            Dict(),
+            Vector(),
+            Vector(), 
             depot_info[i][3], 
             depot_info[i][4],
             max_vehicles, 
@@ -46,15 +48,16 @@ function init_random_chromosome(
             chromosome.depots[i] = Depot(
             Random.shuffle(depot_assignments[i]), 
             1, 
-            Dict(), 
-            0.0, 
+            Dict(),
+            Vector(),
+            Vector(), 
             depot_info[i][3], 
             depot_info[i][4],
             max_vehicles, 
             i
             )
         end
-        chromosome.fitness += chromosome.depots[i].fitness
+        chromosome.fitness += sum(chromosome.depots[i].route_durations)
     
     end
     return chromosome
@@ -123,30 +126,71 @@ function route_scheduler!(depot::Depot, customer_info, distances, num_depots)
             end
         end
     end
-    
-    depot.num_routes = curr_route # Set total number of routes
+
+
     # Phase 2 
     # Check if we can optimize route selection by setting last customer
-    # of route r to be the first customer in route r+1. Still need to boundary check, though.
+    # of route r to be the first customer in route r+1, while still maintaining
+    # the constraints imposed by the problem. The optimization is based on trying
+    # to reduce overall duration of all routes.
     improvement = true
+    counter = 0
     while improvement
-        for i = 1:depot.num_routes-1
+        counter += 1
+        improvement = false
+        for i = depot.num_routes-1:-1:1
+            # Check that length of route is longer than 1
+            if length(depot.routes[i]) == 1
+                continue
+            end
             last_customer = depot.routes[i][end]
+            last_customer_demand = customer_info[last_customer][3]
             next_to_last = depot.routes[i][end-1]
             without_last = depot.routes[i][1:end-1]
             # Find duration of route without last element
             without_last_duration = (
                 route_duration[i]
-                - distances[last_customer + num_depots][depot.id]     # Subtract last customer->depot
-                - distances[next_to_last + num_depots][last_customer] # Subtract next_to_last->last customer
-                + distances[next_to_last + num_depots][depot.id]      # Add next_to_last->depot
+                - distances[last_customer + num_depots, depot.id]     # Subtract last customer->depot
+                - distances[next_to_last + num_depots, last_customer] # Subtract next_to_last->last customer
+                + distances[next_to_last + num_depots, depot.id]      # Add next_to_last->depot
             )
 
-            added_customer = [last_customer] + depot.routes[i+1][:]
+            # Add last element of r to r+1
+            added_customer = depot.routes[i+1][:]
+            pushfirst!(added_customer, last_customer)
+            new_second = depot.routes[i+1][1]
+            added_duration = (
+                route_duration[i+1]
+                - distances[depot.id, new_second+num_depots]                 # Subtract depot->second customer
+                + distances[depot.id, last_customer+num_depots]              # Add depot->new first customer
+                + distances[last_customer+num_depots, new_second+num_depots] # Add new first-> new second
+            )
+
+            # Check if new route has valid load and duration
+            if (
+                route_load[i+1] + last_customer_demand <= depot.max_route_load                   # Check valid load
+                && (depot.max_route_duration == 0 || added_duration <= depot.max_route_duration) # Check valid duration
+                && without_last_duration+added_duration < route_duration[i]+route_duration[i+1]  # Check smaller duration
+            )
+                # Update route r+1
+                depot.routes[i+1] = added_customer
+                route_duration[i+1] = added_duration
+                route_load[i+1] += last_customer_demand
+            
+                # Update route r
+                depot.routes[i] = without_last
+                route_duration[i] = without_last_duration
+                route_load[i] -= last_customer_demand
+                
+                # Set flag variable so we can run another check
+                improvement = true
+            end
+
+        end
 
     end
-    
-    depot.fitness = sum(route_duration)
+    depot.route_durations = route_duration
+    depot.route_loads = route_load
     return true
 end
 
