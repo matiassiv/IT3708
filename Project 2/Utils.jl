@@ -1,5 +1,16 @@
 module Utils
-export calculate_distances, nearest_depot
+export calculate_distances, nearest_depot, ProblemInstance
+
+struct ProblemInstance
+    num_depots::Int
+    num_customers::Int
+    max_vehicles::Int
+    depot_info::Vector{NTuple{4, Int64}}
+    customer_info::Vector{NTuple{3, Int64}}
+    distances::Array{Float64, 2}
+    borderline_customers::Dict{Int, Set{Int}}
+    depot_assignments::Dict{Int, Vector{Int}}
+end
 
 function calculate_euclidean(x1, y1, x2, y2)
     return sqrt((x1-x2)^2 + (y1-y2)^2)
@@ -49,38 +60,56 @@ function calculate_distances(
 end
 
 # Calculates the nearest depot for each customer
-function nearest_depot(distances::Array{Float64, 2}, num_depots::Int, num_customers::Int)
+function nearest_depot(distances::Array{Float64, 2}, num_depots::Int, num_customers::Int, depot_info, bound::Float64=0.1)
     # Returns two dictionaries
     #   nearest_depot_dict = Dict(customer_id => nearest_depot_id)
     #   depot_assignments = Dict(depot_id => [customer_ids])
 
-    nearest_depot_dict = Dict{Int, Int}()
+    nearest_depot_dict = Dict{Int, Vector{Float64}}()
 
     # TODO Might need to implement borderline check for depot reassignments
     #borderline_customers = Dict()
 
     for i = num_depots+1 : num_depots+num_customers
-        min_distance = distances[i, 1]
-        depot = 1
-        for j = 2 : num_depots
-            if distances[i, j] < min_distance
-                min_distance = distances[i, j]
-                depot = j
-            end
+        nearest_depot_dict[i-num_depots] = Vector(undef, num_depots)
+        for j = 1:num_depots
+            nearest_depot_dict[i-num_depots][j] = distances[i, j]
         end
-        nearest_depot_dict[i-num_depots] = depot
     end
 
+    # Find borderline customers
+    borderline_customers = Dict{Int, Set{Int}}()
+    for (key, val) in nearest_depot_dict
+        borderline_depots = []
+        sorted = sort(val)
+        for i = 2:num_depots
+            if (sorted[i]-sorted[1]) / sorted[1] < bound && 2 * sorted[i] <= depot_info[1][3]
+                append!(borderline_depots, findall(x->x==sorted[i], nearest_depot_dict[key]))
+            end
+        end
+        
+        if length(borderline_depots) > 0
+            append!(borderline_depots, findall(x->x==sorted[1], nearest_depot_dict[key]))
+            borderline_customers[key] = Set(borderline_depots)
+        end
+        
+    end
+
+
+    # Assign to initial closest depot
     depot_assignments = Dict{Int, Vector{Int}}()
     for i = 1:num_depots
         depot_assignments[i] = []
     end
     for (key, val) in nearest_depot_dict
-        push!(depot_assignments[val], key)
+        push!(depot_assignments[argmin(val)], key)
     end
 
-    return nearest_depot_dict, depot_assignments
+    return borderline_customers, depot_assignments
 end
+
+
+
 
 end
 
