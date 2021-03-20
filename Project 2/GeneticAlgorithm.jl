@@ -156,7 +156,7 @@ function simple_crossover(
             find_best_feasible!(r_p2, route_encoding_1, problem_params, depot)
             find_best_feasible!(r_p1, route_encoding_2, problem_params, depot)
             
-            c1 = init_chromosome(
+            offspring[i] = init_chromosome(
                 problem_params.num_depots,
                 problem_params.num_customers,
                 problem_params.max_vehicles,
@@ -165,7 +165,7 @@ function simple_crossover(
                 problem_params.customer_info,
                 problem_params.distances
             )
-            c2 = init_chromosome(
+            offspring[i+1] = init_chromosome(
                 problem_params.num_depots,
                 problem_params.num_customers,
                 problem_params.max_vehicles,
@@ -177,13 +177,9 @@ function simple_crossover(
 
         
         else
-            c1 = p1
-            c2 = p2
-        end
-
-        offspring[i] = c1
-        offspring[i+1] = c2
-
+            offspring[i] = p1
+            offspring[i+1] = p2
+        end 
     end
     return offspring
 
@@ -199,11 +195,12 @@ function simple_replacement(generation::GAState, offspring::Vector{Chromosome}):
     pop_fitness = population[1].fitness
     fittest_ind = population[1]
     fittest_score = population[1].fitness
+    elitism = 4
     for i = 2:pop_size
-        if i <= 20
+        if i <= elitism
             population[i] = generation.population[i]
         else
-            population[i] = offspring[i-5]
+            population[i] = offspring[i-elitism]
         end
         pop_fitness += population[i].fitness
         if population[i].fitness < fittest_score

@@ -60,7 +60,7 @@ function calculate_distances(
 end
 
 # Calculates the nearest depot for each customer
-function nearest_depot(distances::Array{Float64, 2}, num_depots::Int, num_customers::Int, depot_info, bound::Float64=0.1)
+function nearest_depot(distances::Array{Float64, 2}, num_depots::Int, num_customers::Int, depot_info, bound::Float64=0.3)
     # Returns two dictionaries
     #   nearest_depot_dict = Dict(customer_id => nearest_depot_id)
     #   depot_assignments = Dict(depot_id => [customer_ids])
@@ -83,7 +83,7 @@ function nearest_depot(distances::Array{Float64, 2}, num_depots::Int, num_custom
         borderline_depots = []
         sorted = sort(val)
         for i = 2:num_depots
-            if (sorted[i]-sorted[1]) / sorted[1] < bound && 2 * sorted[i] <= depot_info[1][3]
+            if (sorted[i]-sorted[1]) / sorted[1] < bound && (depot_info[1][3] == 0 || 2 * sorted[i] <= depot_info[1][3])
                 append!(borderline_depots, findall(x->x==sorted[i], nearest_depot_dict[key]))
             end
         end

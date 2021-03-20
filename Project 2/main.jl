@@ -31,11 +31,11 @@ function main()
     # Calculate relevant interdistances and find nearest depots
     distances = calculate_distances(num_customers, num_depots, depot_info, customer_info)
     borderline_customers, depot_assignments = nearest_depot(distances, num_depots, num_customers, depot_info)
-    #=
+    
     for (key, val) in depot_assignments
         println(key, ": ", val)
     end
-    =#
+    
     println(borderline_customers)
 
     problem_params = ProblemInstance(
@@ -49,18 +49,21 @@ function main()
         depot_assignments 
         )
 
-    best = GA(250, 40, problem_params)
+    best = GA(350, 250, problem_params)
 
     println("BEST FITNESS: ", best.fitness)
     total_customers = []
     for i = 1:length(best.depots)
         println()
         println("SET DIFFERENCE FROM ORIGINAL ", setdiff(depot_assignments[i], best.depots[i].route_encoding))
+        @assert num_routes <= best.depots[i].max_routes
 
         num_routes = best.depots[i].num_routes
         for j = 1:num_routes
             route = best.depots[i].routes[j]
             @assert check_distance(i, num_depots, route, distances) == best.depots[i].route_durations[j]
+            @assert best.depots[i].route_loads[j] <= depot_info[i][4]
+
             append!(total_customers, best.depots[i].routes[j])
             println(i, " ", j, " ", best.depots[i].route_durations[j], " ", best.depots[i].route_loads[j], " ", best.depots[i].routes[j])
         end

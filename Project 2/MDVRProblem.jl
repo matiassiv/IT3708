@@ -108,10 +108,11 @@ function route_scheduler!(
     # where all customer id's are offset by num_depots
 
     # Phase 1
+    routes = Dict{Int, Vector{Int}}()
     curr_route = 1
     route_duration = [0.0]
     route_load = [0]
-    depot.routes[curr_route] = []
+    routes[curr_route] = []
     prev_id = depot.id
 
     for i = 1:length(depot.route_encoding)
@@ -123,7 +124,7 @@ function route_scheduler!(
             && valid_load(depot.max_route_load, demand, route_load[curr_route])
             #&& shorter_than_new_route(distances, depot.id, prev_id, new_id)
         )
-            push!(depot.routes[curr_route], depot.route_encoding[i]) # Add to route
+            push!(routes[curr_route], depot.route_encoding[i]) # Add to route
             route_duration[curr_route] += distances[prev_id, new_id] # Increment route duration
             route_load[curr_route] += demand                         # Increment route load usage
             prev_id = new_id                                         # Set customer as previously visited
@@ -132,8 +133,8 @@ function route_scheduler!(
         else
             route_duration[curr_route] += distances[prev_id, depot.id] # Add return to depot distance
             curr_route += 1                                            # Increment number of routes
-            depot.routes[curr_route] = []                              # Add new route
-            push!(depot.routes[curr_route], depot.route_encoding[i])   # Add customer to new route
+            routes[curr_route] = []                              # Add new route
+            push!(routes[curr_route], depot.route_encoding[i])   # Add customer to new route
             push!(route_duration, distances[depot.id, new_id])         # Add duration of new customer
             push!(route_load, demand)                                  # Add load of new customer
             prev_id = new_id                                           # Set customer as previously visited
@@ -159,32 +160,33 @@ function route_scheduler!(
         improvement = false
         for i = depot.num_routes-1:-1:1
             # Check that length of route is longer than 1
-            if length(depot.routes[i]) < 2
+            if length(routes[i]) < 2
                 continue
             end
-            last_customer = depot.routes[i][end]
+            last_customer = routes[i][end]
             last_customer_demand = customer_info[last_customer][3]
-            next_to_last = depot.routes[i][end-1]
-            without_last = depot.routes[i][1:end-1]
+            next_to_last = routes[i][end-1]
+            without_last = copy(routes[i][1:end-1])
             # Find duration of route without last element
             without_last_duration = (
                 route_duration[i]
                 - distances[last_customer + num_depots, depot.id]     # Subtract last customer->depot
-                - distances[next_to_last + num_depots, last_customer] # Subtract next_to_last->last customer
+                - distances[next_to_last + num_depots, last_customer+num_depots] # Subtract next_to_last->last customer
                 + distances[next_to_last + num_depots, depot.id]      # Add next_to_last->depot
             )
-            
+            @assert abs(check_distance(depot.id, num_depots, without_last, distances) - without_last_duration) < 0.001
 
             # Add last element of r to r+1
-            added_customer = depot.routes[i+1][:]
+            added_customer = copy(routes[i+1])
             pushfirst!(added_customer, last_customer)
-            new_second = depot.routes[i+1][1]
+            new_second = routes[i+1][1]
             added_duration = (
                 route_duration[i+1]
                 - distances[depot.id, new_second+num_depots]                 # Subtract depot->second customer
                 + distances[depot.id, last_customer+num_depots]              # Add depot->new first customer
                 + distances[last_customer+num_depots, new_second+num_depots] # Add new first-> new second
             )
+            @assert abs(check_distance(depot.id, num_depots, added_customer, distances) - added_duration) < 0.001
 
             # Check if new route has valid load and duration
             if (
@@ -193,22 +195,25 @@ function route_scheduler!(
                 && without_last_duration+added_duration < route_duration[i]+route_duration[i+1]  # Check smaller duration
             )
                 # Update route r+1
-                depot.routes[i+1] = added_customer
+                routes[i+1] = added_customer
                 route_duration[i+1] = added_duration
                 route_load[i+1] += last_customer_demand
             
                 # Update route r
-                depot.routes[i] = without_last
+                routes[i] = without_last
                 route_duration[i] = without_last_duration
                 route_load[i] -= last_customer_demand
                 
                 # Set flag variable so we can run another check
                 improvement = true
             end
-            #@assert length(depot.routes[i]) > 0
-            #@assert length(depot.routes[i+1]) > 0
+            #@assert length(routes[i]) > 0
+            #@assert length(routes[i+1]) > 0
         end
 
+    end
+    for (key, val) in routes
+        @assert abs(check_distance(depot.id, num_depots, val, distances) - route_duration[key]) < 0.001
     end
     
     depot.num_routes = length(route_duration)
@@ -221,6 +226,7 @@ function route_scheduler!(
 
     depot.route_durations = route_duration
     depot.route_loads = route_load
+    depot.routes = routes
     return fitness
 end
 #=
