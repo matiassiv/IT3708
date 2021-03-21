@@ -1,6 +1,6 @@
 module FileParser
 
-export mdvrp_parser
+export mdvrp_parser, create_solution_file
 
 function mdvrp_parser(f)
     # Parser for the textfiles describing MDVRP problems
@@ -44,4 +44,22 @@ function mdvrp_parser(f)
 
 end
 
+function create_solution_file(c, output_path::String)
+    f = open(output_path, "w")
+
+    solution_cost = c.fitness
+    println(f, string(solution_cost))
+
+    for i = 1:length(c.depots)
+        for j = 1:length(c.depots[i].route_durations)
+            rd = c.depots[i].route_durations[j]
+            rl = c.depots[i].route_loads[j]
+            r = c.depots[i].routes[j]
+            r = string.(r)
+            r = join(r, " ")
+            println(f, string(i), " ", string(j), " ", string(rd), " ", string(rl), " 0 ", string(r), " 0")
+        end
+    end
+    close(f)
+end
 end

@@ -2,7 +2,7 @@ module MDVRProblem
 include("Utils.jl")
 using .Utils: ProblemInstance
 using Random
-export init_random_chromosome, Chromosome, Depot, check_distance
+export init_random_chromosome, Chromosome, Depot, check_distance, calculate_chromosome_fitness!, test_route_scheduler
 
 mutable struct Depot
     route_encoding::Vector{Int} # Represents the genotype of depot
@@ -91,6 +91,14 @@ function assign_customer!(nearest_depot_dict, chromosome::Chromosome)
     end
 end
 =#
+function calculate_chromosome_fitness!(c::Chromosome)
+    num_depots = c.num_depots
+    c.fitness = 0.0
+    for i = 1:num_depots
+        c.fitness += sum(c.depots[i].route_durations)
+    end
+end
+    
 
 # Convergence speed will most likely heavily rely on how effective the
 # route scheduler is. Possible to add customized heuristics to improve
@@ -159,7 +167,7 @@ function route_scheduler!(
     while improvement
         counter += 1
         improvement = false
-        for i = depot.num_routes-1:-1:1
+        for i = 1:curr_route-1
             # Check that length of route is longer than 1
             if length(routes[i]) < 2
                 continue
@@ -175,7 +183,7 @@ function route_scheduler!(
                 - distances[next_to_last + num_depots, last_customer+num_depots] # Subtract next_to_last->last customer
                 + distances[next_to_last + num_depots, depot.id]      # Add next_to_last->depot
             )
-            @assert abs(check_distance(depot.id, num_depots, without_last, distances) - without_last_duration) < 0.001
+            #@assert abs(check_distance(depot.id, num_depots, without_last, distances) - without_last_duration) < 0.001
 
             # Add last element of r to r+1
             added_customer = copy(routes[i+1])
@@ -187,8 +195,8 @@ function route_scheduler!(
                 + distances[depot.id, last_customer+num_depots]              # Add depot->new first customer
                 + distances[last_customer+num_depots, new_second+num_depots] # Add new first-> new second
             )
-            @assert abs(check_distance(depot.id, num_depots, added_customer, distances) - added_duration) < 0.001
-
+            #@assert abs(check_distance(depot.id, num_depots, added_customer, distances) - added_duration) < 0.001
+            
             # Check if new route has valid load and duration
             if (
                 route_load[i+1] + last_customer_demand <= depot.max_route_load                   # Check valid load
@@ -213,9 +221,16 @@ function route_scheduler!(
         end
 
     end
+    #=
     for (key, val) in routes
+        if length(val) < 1
+            println("Error, route too short, route ", key, ": ", val)
+            println("Route encoding: ", depot.route_encoding)
+            println("Routes: ", routes)
+        end
         @assert abs(check_distance(depot.id, num_depots, val, distances) - route_duration[key]) < 0.001
     end
+    =#
     
     depot.num_routes = length(route_duration)
     fitness = sum(route_duration)
@@ -274,6 +289,37 @@ function check_load(route::Vector{Int}, customer_info::Vector{NTuple{3, Int64}})
         demand += customer_info[customer][3]
     end
     return demand
+end
+
+function test_route_scheduler(customer_info, distances, num_depots)
+
+    route_encoding = [
+        249, 43, 223, 113, 80, 194, 197, 42, 10, 238, 131, 235, 237, 39, 233, 
+        226, 32, 78, 24, 127, 40, 17, 225, 241,
+        64, 193, 101, 114, 13, 167, 89, 153, 230, 170,
+        72, 185, 79, 90, 61, 129, 12, 18, 54,
+        203, 57, 214 ,11, 82 ,224, 163,
+        177, 146, 102, 15, 219 ,75, 162, 52, 84, 135, 69,
+        198, 73 ,207, 213, 112, 8, 190,
+        65, 220, 36, 183, 58, 2,
+        157, 242, 56, 66 ,103, 168, 47, 55, 175, 38,
+        195, 150, 189, 106, 121, 248 ,9, 26, 148, 125,
+        96, 166, 19, 33, 234, 71, 229, 1, 31, 205, 211, 133, 5 ,191, 30, 204,
+        123, 16, 243, 181, 171, 59 ,136, 176, 122 ,62,
+        217, 83, 206, 228, 53 ,130, 221, 49, 124, 137 ,173, 27,
+        ]
+    d = Depot(
+        route_encoding,
+        1, 
+        Dict(),
+        Vector(),
+        Vector(), 
+        310, 
+        500,
+        13,
+        1
+        )
+    fitness = route_scheduler!(d, customer_info, distances, 2)
 end
 
 end
