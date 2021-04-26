@@ -3,10 +3,13 @@ module GeneticAlgorithm
 export generate_initial_generation, GA,  binary_tournament_selection
 #push!(LOAD_PATH, pwd())
 include("MDVRProblem.jl")
+include("FileParser.jl")
 #include("Utils.jl")
-using .MDVRProblem: Chromosome, Depot, init_random_chromosome, init_chromosome, route_scheduler!
+using .MDVRProblem: Chromosome, Depot, init_random_chromosome, init_chromosome, route_scheduler!, calculate_chromosome_fitness!
+using .FileParser: create_solution_file
 using ..Utils: ProblemInstance
 using Random
+using StatsBase
 
 struct GAState
     pop_size::Int
@@ -21,34 +24,58 @@ function GA(
     pop_size::Int,
     max_generations::Int,
     problem_params::ProblemInstance,
-    crossover_rate::Float64=0.6,
-    mutation_rate::Float64=0.05,
-    inter_depot_rate::Float64=0.01,
+    benchmark::Int=300,
+    crossover_rate::Float64=0.7,
+    mutation_rate::Float64=0.09,
     selection::Function=binary_tournament_selection,
     crossover::Function=simple_crossover,
-    mutation::Function=(x,y,z)->x,
+    mutation::Function=simple_mutation!,
     replacement::Function=simple_replacement,
     )::Chromosome   
 
-    population_log = Vector{GAState}(undef, max_generations+1)
+    early_stop = 0
+    early_benchmark = true
+    #population_log = Vector{GAState}()
     generation = generate_initial_generation(pop_size, problem_params)
     best_individual = generation.fittest_ind
-    population_log[1] = generation
+    #push!(population_log, generation)
+    
 
     for g = 1:max_generations
-        #println(generation.pop_fitness / pop_size)
         selected = selection(generation)
         
         offspring = crossover(selected, crossover_rate, problem_params)
-        #mutated_offspring = mutation(offspring, mutation_rate, inter_depot_rate)
+        mutation(offspring, mutation_rate, pop_size, problem_params)
         
         generation = replacement(generation, offspring)
+        #push!(population_log, generation)
 
+        
         if generation.fittest_ind.fitness < best_individual.fitness
-            best_individual = generation.fittest_ind
-        end 
+            best_individual = deepcopy(generation.fittest_ind)
+            early_stop = 0
+        else
+            early_stop += 1
+        end
+        if g % 15 == 0
+            println("\nGen ", g, "\nBest: ", best_individual.fitness, "  Avg: ", generation.pop_fitness/pop_size)
+        end
+                    
+        if early_stop >= 60
+            println("Early stop kicked in at generation: ", g)
+            break
+        end
+        
+        if best_individual.fitness <= benchmark*1.05
+            println("Benchmark reached at generation: ", g)
+            break
+        end
 
-        population_log[g+1] = generation
+        if early_benchmark && best_individual.fitness <= benchmark*1.1
+            create_solution_file(best_individual, "temp_benchmark.txt")
+            early_benchmark = false
+        end
+        
         
     end
     return best_individual
@@ -151,10 +178,15 @@ function simple_crossover(
                 route_encoding_1[i] = setdiff(p1.depots[i].route_encoding, r_p2)
                 route_encoding_2[i] = setdiff(p2.depots[i].route_encoding, r_p1)
             end
-        
-
-            find_best_feasible!(r_p2, route_encoding_1, problem_params, depot)
-            find_best_feasible!(r_p1, route_encoding_2, problem_params, depot)
+            
+            r = Random.rand()
+            if r < 0.3*problem_params.num_depots # It's very costly to run when routes are long
+                find_best_feasible!(r_p2, route_encoding_1, problem_params, depot)
+                find_best_feasible!(r_p1, route_encoding_2, problem_params, depot)
+            else
+                find_random_best_feasible!(r_p2, route_encoding_1, problem_params, depot)
+                find_random_best_feasible!(r_p1, route_encoding_2, problem_params, depot)
+            end
             
             offspring[i] = init_chromosome(
                 problem_params.num_depots,
@@ -195,7 +227,7 @@ function simple_replacement(generation::GAState, offspring::Vector{Chromosome}):
     pop_fitness = population[1].fitness
     fittest_ind = population[1]
     fittest_score = population[1].fitness
-    elitism = 4
+    elitism = 25
     for i = 2:pop_size
         if i <= elitism
             population[i] = generation.population[i]
@@ -264,6 +296,167 @@ function find_best_feasible!(
         route_encoding[depot_id] = best_encoding
     end
 end
+
+function find_random_best_feasible!(
+    parent_route::Vector{Int}, 
+    route_encoding::Dict{Int, Vector{Int}}, 
+    problem_params::ProblemInstance, 
+    depot::Int
+    )
+    for customer in parent_route
+        depot_id = depot
+        # Try to insert customer at all the different places
+        # Randomise depot if it's a borderline customer
+        if haskey(problem_params.borderline_customers, customer)
+            depot_id = Random.rand(problem_params.borderline_customers[customer])
+        end
+
+        #@assert customer in values(problem_params.depot_assignments[depot_id]) || haskey(problem_params.borderline_customers, customer)
+        num_insertions = (length(route_encoding[depot_id])+1) ÷ 3
+        insertion_points = StatsBase.sample(1:length(route_encoding[depot_id])+1, num_insertions, replace=false)
+        best_fitness = Inf
+        # Holds intermediate results has shape [(depot_id fitness, route_encoding)]
+        best_encoding = Vector{Int}(undef, 3)
+        for i in insertion_points
+            
+            # Copy the route_encoding for the "crossovered" depot_id 
+            #enc = route_encoding[depot_id]
+            # Add the customer to copied array
+            insert!(route_encoding[depot_id], i, customer)
+
+            # Create Depot object for the route scheduler
+            d = Depot(
+                route_encoding[depot_id],
+                1, 
+                Dict(),
+                Vector(),
+                Vector(), 
+                problem_params.depot_info[depot_id][3], 
+                problem_params.depot_info[depot_id][4],
+                problem_params.max_vehicles, 
+                depot_id
+            )
+            fitness = route_scheduler!(d, problem_params.customer_info, problem_params.distances, problem_params.num_depots)
+            # Add to intermediate results - the i lets min function differentiate
+            if fitness < best_fitness
+                best_fitness = fitness
+                best_encoding = copy(route_encoding[depot_id])
+            end
+            deleteat!(route_encoding[depot_id], i)
+        end
+        route_encoding[depot_id] = best_encoding
+    end
+end
+
+function simple_mutation!(offspring::Vector{Chromosome}, mutation_rate::Float64, pop_size::Int, problem_params::ProblemInstance)
+    for i = 1:pop_size
+        m = Random.rand()
+        if m <= mutation_rate
+            
+            mut_type = Random.rand()
+            if mut_type < 0.15
+                reversal!(offspring[i], problem_params)
+                #=
+            elseif mut_type >= 0.95
+                swap!(offspring[i], problem_params)
+            =#
+            else
+                offspring[i] = single_rerouting(offspring[i], problem_params)
+            end
+        
+        end
+    end
+
+end
+
+function reversal!(c::Chromosome, problem_params::ProblemInstance)
+    d = Random.rand(1:c.num_depots)
+    depot = c.depots[d]
+    cutpoint_1 = Random.rand(1:length(depot.route_encoding))
+    cutpoint_2 = Random.rand(1:length(depot.route_encoding))
+    while true
+        if cutpoint_1 != cutpoint_2
+            break
+        end
+        cutpoint_2 = Random.rand(1:length(depot.route_encoding))
+    end
+    if cutpoint_1 < cutpoint_2
+        reverse!(depot.route_encoding, cutpoint_1, cutpoint_2)
+    else
+        reverse!(depot.route_encoding, cutpoint_2, cutpoint_1)
+    end
+    new_depot = Depot(
+        depot.route_encoding, 
+        1, 
+        Dict(),
+        Vector(),
+        Vector(), 
+        problem_params.depot_info[d][3], 
+        problem_params.depot_info[d][4],
+        problem_params.max_vehicles, 
+        d
+        )
+    route_scheduler!(new_depot, problem_params.customer_info, problem_params.distances, problem_params.num_depots)
+    c.depots[d] = new_depot
+    calculate_chromosome_fitness!(c)
+end
+
+
+function single_rerouting(c::Chromosome, problem_params::ProblemInstance)
+    depot_id = Random.rand(1:length(c.depots))
+    customer = Random.rand(c.depots[depot_id].route_encoding)
+
+    route_encoding = Dict{Int, Vector{Int}}()
+    for i = 1:problem_params.num_depots
+        if i == depot_id
+            route_encoding[i] = filter(x->x != customer, c.depots[i].route_encoding)
+        else
+            route_encoding[i] = c.depots[i].route_encoding
+        end
+    end
+    find_best_feasible!([customer], route_encoding, problem_params, depot_id)
+    
+    c1 = init_chromosome(
+        problem_params.num_depots,
+        problem_params.num_customers,
+        problem_params.max_vehicles,
+        route_encoding,
+        problem_params.depot_info,
+        problem_params.customer_info,
+        problem_params.distances
+    )
+
+    return c1
+end
+
+function swap!(c::Chromosome, problem_params::ProblemInstance)
+    d = Random.rand(1:c.num_depots)
+    depot = c.depots[d]
+
+    swap_1 = Random.rand(1:length(depot.route_encoding))
+    swap_2 = Random.rand(1:length(depot.route_encoding))
+
+    temp = depot.route_encoding[swap_1]
+    depot.route_encoding[swap_1] = depot.route_encoding[swap_2]
+    depot.route_encoding[swap_2] = temp
+
+    new_depot = Depot(
+        depot.route_encoding, 
+        1, 
+        Dict(),
+        Vector(),
+        Vector(), 
+        problem_params.depot_info[d][3], 
+        problem_params.depot_info[d][4],
+        problem_params.max_vehicles, 
+        d
+        )
+    route_scheduler!(new_depot, problem_params.customer_info, problem_params.distances, problem_params.num_depots)
+    c.depots[d] = new_depot
+    calculate_chromosome_fitness!(c)
+
+end
+
 
 end
 

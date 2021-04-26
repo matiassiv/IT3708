@@ -3,18 +3,18 @@ include("Utils.jl")
 include("MDVRProblem.jl")
 include("Parameters.jl")
 include("GeneticAlgorithm.jl")
-using .FileParser: mdvrp_parser
+using .FileParser: mdvrp_parser, create_solution_file
 using .Utils: calculate_distances, nearest_depot, ProblemInstance
-using .MDVRProblem: Depot, Chromosome, init_random_chromosome, check_distance
+using .MDVRProblem: Depot, Chromosome, init_random_chromosome, check_distance, test_route_scheduler
 using .Parameters: Params
 using .GeneticAlgorithm: GA
 
-function main()
+function main(benchmark::Int=300)
     # Load relevant params
     p = Params()
 
     # Open problem file
-    f = open(p.PROBLEM_FILEPATH, "r")
+    f = open(p.FILEPATH*p.PROBLEM, "r")
     num_depots, num_customers, max_vehicles, depot_info, customer_info = mdvrp_parser(f)
     close(f)
     println("Num_depots: ", num_depots)
@@ -27,6 +27,7 @@ function main()
     for i = 1:length(customer_info)
         println(i, ": ", customer_info[i])
     end
+    
     =#
     # Calculate relevant interdistances and find nearest depots
     distances = calculate_distances(num_customers, num_depots, depot_info, customer_info)
@@ -50,7 +51,8 @@ function main()
         #Dict{}
         )
 
-    best = GA(350, 350, problem_params)
+    
+    best = GA(270, 1000, problem_params, benchmark)
 
     println("BEST FITNESS: ", best.fitness)
     total_customers = []
@@ -62,7 +64,7 @@ function main()
         num_routes = best.depots[i].num_routes
         for j = 1:num_routes
             route = best.depots[i].routes[j]
-            @assert abs(check_distance(i, num_depots, route, distances) - best.depots[i].route_durations[j]) < 0.0001
+            @assert abs(check_distance(i, num_depots, route, distances) -    best.depots[i].route_durations[j]) < 0.0001
             @assert best.depots[i].route_loads[j] <= depot_info[i][4]
             @assert depot_info[i][3] == 0 || best.depots[i].route_durations[j] <= depot_info[i][3]
             append!(total_customers, best.depots[i].routes[j])
@@ -70,4 +72,6 @@ function main()
         end
     end
     println("NUMBER OF CUSTOMERS: ", num_customers, " NUM SERVED: ", length(unique(total_customers)))
+    create_solution_file(best, p.PROBLEM*".txt")
+    
 end
