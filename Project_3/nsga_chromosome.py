@@ -22,7 +22,6 @@ from utils import (
     rgb_euclidean
 )
 
-
 class Chromosome:
     def __init__(self, arr, genotype=None):
 
@@ -31,16 +30,28 @@ class Chromosome:
         # Generate initial phenotype
         if genotype is None:
             self.genotype = mst(arr, self.rows, self.cols)
+           
         else:
             self.genotype = genotype
         
         self.segments = find_segments(self.genotype)
-        self.edge_value = edge_value(arr, self.segments, self.rows, self.cols)
+        self.num_segments = max(self.segments) + 1
+        self.edge_value = -edge_value(arr, self.segments, self.rows, self.cols) # negative to minimize
         self.connectivity = connectivity(arr, self.segments, self.rows, self.cols)
         self.deviation = overall_deviation(arr, self.segments, self.cols)
-        self.fitness = 10*self.edge_value - 8500*self.connectivity - 2*self.deviation
+
+    # Overload < operator to perform sort on list of Chromosomes
+    def __lt__(self, other):
+        if self.rank < other.rank:
+            return True
+        elif self.rank == other.rank and self.distance > other.distance:
+            return True
+        else:
+            return False
 
 
+
+#@jit(nopython=True)
 def crossover(p1_genotype, p2_genotype, cutoff):
     genotype_length = len(p1_genotype)
     child_genotype = [i for i in range(genotype_length)]
@@ -205,30 +216,110 @@ def parent_selection(population):
     p1_idx = randint(0, pop_size-1)
     p2_idx = randint(0, pop_size-1)
 
-    if population[p1_idx].fitness > population[p2_idx].fitness:
+    if population[p1_idx] < population[p2_idx]: # Uses overloaded function from class definition
         return population[p1_idx]
     else:
         return population[p2_idx]
 
-def sort_by_fitness(population):
-    population.sort(reverse=True, key=lambda c: c.fitness)
+@jit(nopython=True)
+def check_constraints(p, constraints):
+    if p[4] >= constraints[0] and p[4] <= constraints[1]:
+        return True
+    return False
 
-def elitist_replacement(old_pop, new_pop):
-    pop_size = len(old_pop)
-    tot_pop = old_pop + new_pop
-    sort_by_fitness(tot_pop)
-    return tot_pop[:pop_size]
+@jit(nopython=True)
+def check_dominates(p, q, constraints):
+    """
+    p and q are numpy arrays: [edge_value, connectivity, deviation, pop_index]
+    """
+    if check_constraints(p, constraints) and not check_constraints(q, constraints):
+        return True
+    elif p[0] < q[0] and p[1] <= q[1] and p[2] <= q[2]:
+        return True
+    elif p[0] <= q[0] and p[1] < q[1] and p[2] <= q[2]:
+        return True
+    elif p[0] <= q[0] and p[1] <= q[1] and p[2] < q[2]:
+        return True
+    else:
+        return False
+
+@jit(nopython=True)
+def nd_sort(pop, constraints):
+    """
+    pop has the shape (num_chromosomes, 5)
+    where each row is a numpy array with the objectives and population index
+    [-edge_value, connectivity, deviation, pop_index, num_segments]
+    constraints is a tuple of the form (min_segments, max_segments)
+    Returns:
+    F - dictionary of frontiers with indices of population for each frontier
+    rank - list where index of list corresponds with index in pop, and value is rank of individual
+    """
+    # Dictionary of solutions with key p, where value is list of solutions
+    # that are dominated by p
+    S = {}                 
+    n = [0 for i in range(pop.shape[0])] # Domination counter for an individual p
+    F = {} # Dictionary for frontiers containing lists of indices in a frontier
+    ranks = [0 for i in range(pop.shape[0])] # ranks tracker - essentially inverse of F dict
+
+    F_1 = [0 for x in range(0)] # Initialize dict and list for numba
+    # Iterate over 
+    for p in range(pop.shape[0]):
+        # Get index and initialise S[p] to empty list
+        #p_idx = int(pop[p,3])
+        S_p = [0 for x in range(0)] # Initialise int list for numba
+
+        for q in range(pop.shape[0]):
+            if check_dominates(pop[p], pop[q], constraints):
+                S_p.append(q)
+            elif check_dominates(pop[q], pop[p], constraints):
+                n[p] += 1
+
+        S[p] = np.array(S_p)
+
+        if n[p] == 0:
+            ranks[p] = 1
+            F_1.append(p)
+    F[1] = np.array(F_1) # Numba currently doesn't support list as value in dict
+    i = 1
+    while len(F[i]) > 0:
+        Q = [0 for x in range(0)]
+        for p in F[i]:
+            for q in S[p]:
+                n[q] -= 1
+                if n[q] == 0:
+                    ranks[q] = i + 1
+                    Q.append(q)
+        i += 1
+        F[i] = np.array(Q)
+    
+    return F, ranks
+
+@jit(nopython=True)
+def crowding_distance(frontier):
+    """
+    solutions is a 2d numpy array with shape (num_frontier_solutions, 4)
+    where cols are [-edge_val, connectivity, deviation, pop_idx, num_segments]
+    """
+    l = frontier.shape[0] # Get number of solutions in frontier
+    distances = [0.0 for x in range(l)]
+
+    
+    for m in range(3):
+        sorted_idx = np.argsort(frontier[:, m])
+        
+        frontier_m = frontier[sorted_idx]
+        distances[sorted_idx[0]] = np.inf
+        distances[sorted_idx[l-1]] = np.inf
+        for i in range(1, l-1):
+            f_idx = sorted_idx[i]
+            diff = frontier_m[i+1,m] - frontier_m[i-1,m]
+
+            range_approx = frontier_m[l-1,m] - frontier_m[0,m] # Hard to find objective min and max
+            distances[f_idx] = distances[f_idx] + diff /(range_approx + 1e-4) # add small eps to avoid 0 division
+    
+    return distances
 
 
 
- 
-
-
-
-
-if __name__ == "__main__":
-    arr = load_image("training_images/118035/Test image.jpg")
-    start_time = time.time()
-    for i in range(50):
-        c = Chromosome(arr)
-    print("Time elapsed:", time.time() - start_time)
+#def crowding_comparison(c1, c2):
+    
